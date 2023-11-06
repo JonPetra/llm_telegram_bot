@@ -1,10 +1,13 @@
 import html
 import requests
+import os
+from dotenv import load_dotenv
 from telegram import Update, Bot
 from telegram.ext import Application, CommandHandler, MessageHandler, filters
 
-TOKEN =  # Your bot token here
-URI =  # Your API URI here
+load_dotenv()
+TOKEN = os.getenv("TELEGRAM_TOKEN")
+URI = os.getenv("API_URI")
 
 
 async def start_command(update: Update, context):
@@ -16,6 +19,7 @@ history = {"internal": [], "visible": []}
 
 async def handle_message(update: Update, context):
     global history
+    response = None
     message = update.message.text
     history["visible"].append([message, ""])
     history["internal"].append([message, ""])
@@ -29,14 +33,6 @@ async def handle_message(update: Update, context):
         "character": "Example",
         "instruction_template": "Vicuna-v1.1",
         "your_name": "You",
-        # 'name1': 'name of user', # Optional
-        # 'name2': 'name of character', # Optional
-        # 'context': 'character context', # Optional
-        # 'greeting': 'greeting', # Optional
-        # 'name1_instruct': 'You', # Optional
-        # 'name2_instruct': 'Assistant', # Optional
-        # 'context_instruct': 'context_instruct', # Optional
-        # 'turn_template': 'turn_template', # Optional
         "regenerate": False,
         "_continue": False,
         "chat_instruct_command": 'Continue the chat dialogue below. Write a single reply for the character "<|character|>".\n\n<|prompt|>',
@@ -72,13 +68,36 @@ async def handle_message(update: Update, context):
         "skip_special_tokens": True,
         "stopping_strings": [],
     }
-    response = requests.post(URI, json=request_payload)
-    if response.status_code == 200:
+    try:
+        response = requests.post(URI, json=request_payload)
+        response.raise_for_status()
+
         result = response.json()["results"][0]["history"]
         generated_text = result["visible"][-1][1]
+
+        if not generated_text.strip():
+            generated_text = "I'm not sure how to respond to that."
+
         history["visible"][-1][1] = generated_text
         history["internal"][-1][1] = generated_text
         await update.message.reply_text(html.unescape(generated_text))
+
+    except requests.exceptions.HTTPError as http_err:
+        status_code = response.status_code if response is not None else "N/A"
+        error_msg = f"HTTP error occurred: {http_err} - Status Code: {status_code}"
+        if response and response.status_code == 503:
+            error_msg += " - Service Unavailable. Please try again later."
+        await update.message.reply_text(error_msg)
+    except requests.exceptions.ConnectionError:
+        await update.message.reply_text(
+            "Failed to connect to the service. Please check your connection."
+        )
+    except requests.exceptions.Timeout:
+        await update.message.reply_text(
+            "The request to the service timed out. Please try again."
+        )
+    except requests.exceptions.RequestException as err:
+        await update.message.reply_text(f"An unexpected error occurred: {err}")
 
 
 bot = Bot(TOKEN)
